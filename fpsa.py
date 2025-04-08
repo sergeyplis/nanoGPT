@@ -99,7 +99,7 @@ class FixedPointSelfAttentionStep(nn.Module):
 
 
 class FixedPointSelfAttentionStepFlash(nn.Module):
-    def __init__(self, embed_dim, num_heads=1, normalize=True, causal=False):
+    def __init__(self, embed_dim, num_heads=1, normalize=True, causal=False, dropout=0):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -112,6 +112,7 @@ class FixedPointSelfAttentionStepFlash(nn.Module):
         self.normalize = nn.Tanh() if normalize else None
         self.qkv = nn.Linear(embed_dim, 3 * embed_dim)
         self.causal = causal
+        self.dropout = 0
         self._init_weights()
 
     def _init_weights(self):
@@ -138,7 +139,7 @@ class FixedPointSelfAttentionStepFlash(nn.Module):
 
         # PyTorch 2.0 native efficient attention
         out = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=None, is_causal=self.causal
+            q, k, v, attn_mask=None, is_causal=self.causal, dropout_p=self.dropout
         )  # (B, H, N, D)
 
         # Final reshape to (B, N, C)
@@ -162,6 +163,7 @@ class FixedPointSelfAttention(nn.Module):
         residual=True,
         causal=False,
         flash=False,
+        dropout=0
     ):
         super().__init__()
         self.max_iter = max_iter
@@ -171,7 +173,7 @@ class FixedPointSelfAttention(nn.Module):
         self.normalize = nn.Tanh() if layer_norm else None
         if flash and hasattr(torch.nn.functional, "scaled_dot_product_attention"):
             self.attention_step = FixedPointSelfAttentionStepFlash(
-                embed_dim, num_heads, layer_norm
+                embed_dim, num_heads, layer_norm, dropout=dropout
             )
         else:
             self.attention_step = FixedPointSelfAttentionStep(
