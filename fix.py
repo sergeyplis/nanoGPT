@@ -9,8 +9,9 @@ class FixedPointIteration(torch.autograd.Function):
         B, N, C = z.shape
         H = num_heads
         D = C // H
-        
+
         with torch.no_grad():
+            allconverged_indicator = False
             for _ in range(max_iter):
                 z_next = f(x, z)
                 diff = (z_next - z).view(B, N, H, D)
@@ -28,8 +29,11 @@ class FixedPointIteration(torch.autograd.Function):
                 z = torch.where(update_mask, z_next, z)
 
                 if torch.all(converged):
+                    # print(f'forward: convergef in {_}')
+                    allconverged_indicator = True
                     break
-
+        # if not allconverged_indicator:
+        #    print("forward has not converged")
         ctx.save_for_backward(x, z)
         ctx.f = f
         ctx.max_iter = max_iter
@@ -44,7 +48,7 @@ class FixedPointIteration(torch.autograd.Function):
         max_iter = ctx.max_iter
         tol = ctx.tol
         num_heads = ctx.num_heads
-        
+
         B, N, C = z_star.shape
         H = num_heads
         D = C // H
@@ -54,6 +58,7 @@ class FixedPointIteration(torch.autograd.Function):
 
         _, vjp_fn = func.vjp(f_z, z_star)
 
+        allconverged_indicator = False
         adjoint = grad_output
         for i in range(max_iter):
             JTv = vjp_fn(adjoint)[0]
@@ -74,7 +79,12 @@ class FixedPointIteration(torch.autograd.Function):
             adjoint = torch.where(update_mask, adjoint_next, adjoint)
 
             if torch.all(converged):
+                # print(f"{i}")
+                allconverged_indicator = True
                 break
+
+        #        if not allconverged_indicator:
+        #            print('Backward has not converged')
 
         def f_x(x):
             return f(x, z_star)
