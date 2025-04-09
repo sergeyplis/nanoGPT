@@ -43,7 +43,8 @@ init_from = "scratch"  # 'scratch' or 'resume' or 'gpt2*'
 wandb_log = True  # disabled by default
 wandb_entity = "neuroneural"
 wandb_project = "nanoGPFIX"
-wandb_run_name = "FIX"  # 'run' + str(time.time())
+wandb_run_name = "gpt-2.2"  # 'run' + str(time.time())
+fixpoint = False
 # data
 dataset = "openwebtext"
 gradient_accumulation_steps = 5 * 8  # used to simulate larger batch sizes
@@ -181,6 +182,7 @@ model_args = dict(
     n_embd=n_embd,
     block_size=block_size,
     bias=bias,
+    fixpoint=fixpoint,
     vocab_size=None,
     dropout=dropout,
 )  # start with model_args from command line

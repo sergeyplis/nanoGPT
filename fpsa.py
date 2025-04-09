@@ -202,13 +202,6 @@ class FixedPointSelfAttention(nn.Module):
                 embed_dim,
                 num_heads,
                 layer_norm,
-                causal=False,
-                block_size=block_size,
-            )
-            self.attention_step_final = FixedPointSelfAttentionStep(
-                embed_dim,
-                num_heads,
-                layer_norm,
                 causal=causal,
                 block_size=block_size,
             )
@@ -225,7 +218,6 @@ class FixedPointSelfAttention(nn.Module):
             self.eps,
         )
 
-        # z_star = self.attention_step_final(x, z_star)
         out = self.out_proj(z_star)
 
         if self.residual:
