@@ -57,20 +57,28 @@ class SelfAttention(nn.Module):
 
 
 class FixedPointSelfAttentionStep(nn.Module):
-    def __init__(self, embed_dim, num_heads=1, normalize=True, causal=False):
+    def __init__(
+        self, embed_dim, num_heads=1, normalize=True, causal=False, block_size=64
+    ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         # mating sure all heads get initialized with different temperature
         temperature_init = torch.ones(self.num_heads)
-        for h in range(self.num_heads):
-            temperature_init[h] += (h + 1) * 0.1
+        # for h in range(self.num_heads):
+        #     temperature_init[h] += (h + 1) * 0.1
         self.temperature = nn.Parameter(temperature_init)
         self.normalize = nn.Tanh() if normalize else None
         self.qkv = nn.Linear(embed_dim, 3 * embed_dim)
         self.causal = causal
         self._init_weights()
+        if causal:
+            self.register_buffer(
+                "causal_mask",
+                torch.triu(torch.ones(1, 1, block_size, block_size), diagonal=1).bool(),
+                persistent=False,
+            )
 
     def _init_weights(self):
         nn.init.orthogonal_(self.qkv.weight)
@@ -88,6 +96,9 @@ class FixedPointSelfAttentionStep(nn.Module):
         scale = D**-0.5
         attn = (q @ k.transpose(-2, -1)) * scale
         attn = attn / self.temperature.view(1, H, 1, 1)
+        if self.causal:
+            mask = self.causal_mask[..., :N, :N]
+            attn = attn.masked_fill(mask, float("-inf"))
         attn = attn.softmax(dim=-1)
 
         v = x.reshape(B, -1, H, D).transpose(1, 2)
@@ -99,7 +110,14 @@ class FixedPointSelfAttentionStep(nn.Module):
 
 
 class FixedPointSelfAttentionStepFlash(nn.Module):
-    def __init__(self, embed_dim, num_heads=1, normalize=True, causal=False, dropout=0):
+    def __init__(
+        self,
+        embed_dim,
+        num_heads=1,
+        normalize=True,
+        causal=False,
+        dropout=0,
+    ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -163,7 +181,8 @@ class FixedPointSelfAttention(nn.Module):
         residual=True,
         causal=False,
         flash=False,
-        dropout=0
+        dropout=0,
+        block_size=64,
     ):
         super().__init__()
         self.max_iter = max_iter
@@ -173,11 +192,25 @@ class FixedPointSelfAttention(nn.Module):
         self.normalize = nn.Tanh() if layer_norm else None
         if flash and hasattr(torch.nn.functional, "scaled_dot_product_attention"):
             self.attention_step = FixedPointSelfAttentionStepFlash(
-                embed_dim, num_heads, layer_norm, dropout=dropout
+                embed_dim, num_heads, layer_norm, causal=False, dropout=dropout
+            )
+            self.attention_step_final = FixedPointSelfAttentionStepFlash(
+                embed_dim, num_heads, layer_norm, causal=causal, dropout=dropout
             )
         else:
             self.attention_step = FixedPointSelfAttentionStep(
-                embed_dim, num_heads, layer_norm
+                embed_dim,
+                num_heads,
+                layer_norm,
+                causal=False,
+                block_size=block_size,
+            )
+            self.attention_step_final = FixedPointSelfAttentionStep(
+                embed_dim,
+                num_heads,
+                layer_norm,
+                causal=causal,
+                block_size=block_size,
             )
 
     def forward(self, x):
@@ -192,6 +225,7 @@ class FixedPointSelfAttention(nn.Module):
             self.eps,
         )
 
+        # z_star = self.attention_step_final(x, z_star)
         out = self.out_proj(z_star)
 
         if self.residual:
