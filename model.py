@@ -10,6 +10,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 import math
 import inspect
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 
 import torch
 import torch.nn as nn
@@ -160,22 +161,10 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalSelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        self.mlp = MLP(config)
-
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
-        return x
-
-
-class FIXBlock(nn.Module):
-
-    def __init__(self, config):
-        super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
-        self.attn = CausalFixedPointSelfAttention(config)
+        if config.fixpoint:
+            self.attn = CausalFixedPointSelfAttention(config)
+        else:
+            self.attn = CausalSelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
 
@@ -214,9 +203,9 @@ class GPT(nn.Module):
                 wte=nn.Embedding(config.vocab_size, config.n_embd),
                 wpe=nn.Embedding(config.block_size, config.n_embd),
                 drop=nn.Dropout(config.dropout),
-                enc=Block(config),
-                dec=Block(config),
-                h=nn.ModuleList([FIXBlock(config) for _ in range(config.n_layer - 2)]),
+                enc=Block(dataclass_replace(config, fixpoint=False)),
+                dec=Block(dataclass_replace(config, fixpoint=False)),
+                h=nn.ModuleList([Block(config) for _ in range(config.n_layer - 2)]),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
             )
         )
