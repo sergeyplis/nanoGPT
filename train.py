@@ -18,6 +18,7 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 
 import os
 import time
+import datetime
 import math
 import pickle
 from contextlib import nullcontext
@@ -79,7 +80,7 @@ dtype = (
     if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
     else "float16"
 )  # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True  # use PyTorch 2.0 to compile the model to be faster
+compile = False  # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [
     k
@@ -268,6 +269,7 @@ if compile:
 # wrap model into DDP container
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
+    torch.distributed.barrier(device_ids=[ddp_local_rank])
 
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
@@ -318,6 +320,9 @@ raw_model = model.module if ddp else model  # unwrap DDP container if needed
 running_mfu = -1.0
 while True:
 
+    # if ddp:
+    #    torch.cuda.synchronize()
+
     # # determine and set the learning rate for this iteration
     # lr = get_lr(iter_num) if decay_lr else learning_rate
     # for param_group in optimizer.param_groups:
@@ -366,15 +371,33 @@ while True:
             model.require_backward_grad_sync = (
                 micro_step == gradient_accumulation_steps - 1
             )
-        with ctx:
-            logits, loss = model(X, Y)
-            loss = (
-                loss / gradient_accumulation_steps
-            )  # scale the loss to account for gradient accumulation
-        # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = get_batch("train")
-        # backward pass, with gradient scaling if training in fp16
-        scaler.scale(loss).backward()
+        if ddp and fixpoint:
+            with model.no_sync():
+                with ctx:
+                    logits, loss = model(X, Y)
+                    loss = (
+                        loss / gradient_accumulation_steps
+                    )  # scale the loss to account for gradient accumulation
+                X, Y = get_batch("train")
+                scaler.scale(loss).backward()
+            torch.distributed.barrier()
+            # for name, param in model.named_parameters():
+            #     if param.requires_grad:
+            #         if param.grad is None:
+            #             print(f"[Warning] Parameter '{name}' has no gradient.")
+            #         else:
+            #             grad_norm = param.grad.norm().item()
+            #             print(f"Parameter '{name}' gradient norm: {grad_norm:.4f}")
+        else:
+            with ctx:
+                logits, loss = model(X, Y)
+                loss = (
+                    loss / gradient_accumulation_steps
+                )  # scale the loss to account for gradient accumulation
+            # immediately async prefetch next batch while model is doing the forward pass on the GPU
+            X, Y = get_batch("train")
+            # backward pass, with gradient scaling if training in fp16
+            scaler.scale(loss).backward()
     # clip the gradient
     if grad_clip != 0.0:
         scaler.unscale_(optimizer)
