@@ -124,8 +124,8 @@ class CausalFixedPointSelfAttention(nn.Module):
         self.fpsa = FixedPointSelfAttention(
             embed_dim=config.n_embd,
             num_heads=config.n_head,
-            max_iter=500,
-            eps=5e-11,  # 5e-11,
+            max_iter=1000,
+            eps=1e-5,  # 5e-11,
             layer_norm=True,
             residual=True,
             causal=False,

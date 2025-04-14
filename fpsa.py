@@ -122,7 +122,7 @@ class FixedPointSelfAttentionStepFlash(nn.Module):
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
-        # mating sure all heads get initialized with different temperature
+        # making sure all heads get initialized with different temperature
         temperature_init = torch.ones(self.num_heads)
         for h in range(self.num_heads):
             temperature_init[h] += (h + 1) * 0.1
@@ -192,9 +192,6 @@ class FixedPointSelfAttention(nn.Module):
         self.normalize = nn.Tanh() if layer_norm else None
         if flash and hasattr(torch.nn.functional, "scaled_dot_product_attention"):
             self.attention_step = FixedPointSelfAttentionStepFlash(
-                embed_dim, num_heads, layer_norm, causal=False, dropout=dropout
-            )
-            self.attention_step_final = FixedPointSelfAttentionStepFlash(
                 embed_dim, num_heads, layer_norm, causal=causal, dropout=dropout
             )
         else:
