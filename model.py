@@ -46,6 +46,7 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
+        self.causal = config.causal
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = hasattr(torch.nn.functional, "scaled_dot_product_attention")
         if not self.flash:
@@ -86,7 +87,7 @@ class CausalSelfAttention(nn.Module):
                 v,
                 attn_mask=None,
                 dropout_p=self.dropout if self.training else 0,
-                is_causal=True,
+                is_causal=self.causal,  # True,
             )
         else:
             # manual implementation of attention
@@ -124,11 +125,11 @@ class CausalFixedPointSelfAttention(nn.Module):
         self.fpsa = FixedPointSelfAttention(
             embed_dim=config.n_embd,
             num_heads=config.n_head,
-            max_iter=1000,
-            eps=1e-5,  # 5e-11,
+            max_iter=500,
+            eps=5e-1,  # 5e-11,
             layer_norm=True,
             residual=True,
-            causal=False,
+            causal=config.causal,
             flash=True,
             dropout=config.dropout if self.training else 0.0,
             block_size=config.block_size,
@@ -185,6 +186,7 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     fixpoint: bool = False
+    causal: bool = False
     bias: bool = (
         True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     )
@@ -203,8 +205,8 @@ class GPT(nn.Module):
                 wte=nn.Embedding(config.vocab_size, config.n_embd),
                 wpe=nn.Embedding(config.block_size, config.n_embd),
                 drop=nn.Dropout(config.dropout),
-                enc=Block(dataclass_replace(config, fixpoint=False)),
-                dec=Block(dataclass_replace(config, fixpoint=False)),
+                enc=Block(dataclass_replace(config, fixpoint=False, causal=True)),
+                dec=Block(dataclass_replace(config, fixpoint=False, causal=True)),
                 h=nn.ModuleList([Block(config) for _ in range(config.n_layer - 2)]),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
             )
