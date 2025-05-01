@@ -96,11 +96,12 @@ class FixedPointSelfAttentionStep(nn.Module):
         scale = D**-0.5
         attn = (q @ k.transpose(-2, -1)) * scale
         attn = attn / self.temperature.view(1, H, 1, 1)
+
+        diag_penalty = 0.1
         if self.causal:
             mask = self.causal_mask[..., :N, :N]
             attn = attn.masked_fill(mask, float("-inf"))
-        attn = attn.softmax(dim=-1)
-
+            attn = attn.softmax(dim=-1)
         v = x.reshape(B, -1, H, D).transpose(1, 2)
         z_next = (attn @ v).transpose(1, 2).reshape(B, -1, C)
 
@@ -138,7 +139,7 @@ class FixedPointSelfAttentionStepFlash(nn.Module):
         if self.qkv.bias is not None:
             nn.init.zeros_(self.qkv.bias)
 
-    def forward(self, z_k, x):
+    def forward(self, z_k, x, causal=None):
         B, N, C = z_k.shape
         H = self.num_heads
         D = self.head_dim
@@ -155,9 +156,11 @@ class FixedPointSelfAttentionStepFlash(nn.Module):
         q = q * scale
         k = k * scale
 
+        causal = self.causal if causal is None else causal
+
         # PyTorch 2.0 native efficient attention
         out = torch.nn.functional.scaled_dot_product_attention(
-            q, k, v, attn_mask=None, is_causal=self.causal, dropout_p=self.dropout
+            q, k, v, attn_mask=None, is_causal=causal, dropout_p=self.dropout
         )  # (B, H, N, D)
 
         # Final reshape to (B, N, C)
@@ -192,14 +195,14 @@ class FixedPointSelfAttention(nn.Module):
         self.normalize = nn.Tanh() if layer_norm else None
         if flash and hasattr(torch.nn.functional, "scaled_dot_product_attention"):
             self.attention_step = FixedPointSelfAttentionStepFlash(
-                embed_dim, num_heads, layer_norm, causal=causal, dropout=dropout
+                embed_dim, num_heads, layer_norm, causal=False, dropout=dropout
             )
         else:
             self.attention_step = FixedPointSelfAttentionStep(
                 embed_dim,
                 num_heads,
                 layer_norm,
-                causal=causal,
+                causal=False,
                 block_size=block_size,
             )
 
@@ -208,13 +211,14 @@ class FixedPointSelfAttention(nn.Module):
 
         # Use the custom fixed-point autograd function
         z_star = FixedPointIteration.apply(
-            lambda inp, z: self.attention_step(z, inp),
+            self.attention_step,
             x,
             z_init,
             self.max_iter,
             self.eps,
         )
 
+        z_star = self.attention_step(z_star, x, causal=True)
         out = self.out_proj(z_star)
 
         if self.residual:

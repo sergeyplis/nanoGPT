@@ -135,8 +135,29 @@ ctx = (
 # poor man's data loader
 data_dir = os.path.join("data", dataset)
 
+# Load full data once into memory and onto the GPU
+train_data = torch.from_numpy(
+    np.memmap(os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r").astype(
+        np.int64
+    )
+).to(device)
+
+val_data = torch.from_numpy(
+    np.memmap(os.path.join(data_dir, "val.bin"), dtype=np.uint16, mode="r").astype(
+        np.int64
+    )
+).to(device)
+
 
 def get_batch(split):
+    data = train_data if split == "train" else val_data
+    ix = torch.randint(len(data) - block_size, (batch_size,), device=device)
+    x = torch.stack([data[i : i + block_size] for i in ix])
+    y = torch.stack([data[i + 1 : i + 1 + block_size] for i in ix])
+    return x, y
+
+
+def _get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == "train":

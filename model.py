@@ -125,8 +125,8 @@ class CausalFixedPointSelfAttention(nn.Module):
         self.fpsa = FixedPointSelfAttention(
             embed_dim=config.n_embd,
             num_heads=config.n_head,
-            max_iter=500,
-            eps=5e-1,  # 5e-11,
+            max_iter=30,
+            eps=5e-11,  # 5e-11,
             layer_norm=True,
             residual=True,
             causal=config.causal,
@@ -186,7 +186,7 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     fixpoint: bool = False
-    causal: bool = False
+    causal: bool = True
     bias: bool = (
         True  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     )
