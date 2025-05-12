@@ -66,8 +66,8 @@ class FixedPointSelfAttentionStep(nn.Module):
         self.head_dim = embed_dim // num_heads
         # mating sure all heads get initialized with different temperature
         temperature_init = torch.ones(self.num_heads)
-        # for h in range(self.num_heads):
-        #     temperature_init[h] += (h + 1) * 0.1
+        for h in range(self.num_heads):
+            temperature_init[h] += (h + 1) * 0.1
         self.temperature = nn.Parameter(temperature_init)
         self.normalize = nn.Tanh() if normalize else None
         self.qkv = nn.Linear(embed_dim, 3 * embed_dim)
@@ -97,11 +97,10 @@ class FixedPointSelfAttentionStep(nn.Module):
         attn = (q @ k.transpose(-2, -1)) * scale
         attn = attn / self.temperature.view(1, H, 1, 1)
 
-        diag_penalty = 0.1
         if self.causal:
             mask = self.causal_mask[..., :N, :N]
             attn = attn.masked_fill(mask, float("-inf"))
-            attn = attn.softmax(dim=-1)
+        attn = attn.softmax(dim=-1)
         v = x.reshape(B, -1, H, D).transpose(1, 2)
         z_next = (attn @ v).transpose(1, 2).reshape(B, -1, C)
 
@@ -131,7 +130,7 @@ class FixedPointSelfAttentionStepFlash(nn.Module):
         self.normalize = nn.Tanh() if normalize else None
         self.qkv = nn.Linear(embed_dim, 3 * embed_dim)
         self.causal = causal
-        self.dropout = 0
+        self.dropout = dropout
         self._init_weights()
 
     def _init_weights(self):
@@ -218,7 +217,7 @@ class FixedPointSelfAttention(nn.Module):
             self.eps,
         )
 
-        z_star = self.attention_step(z_star, x, causal=True)
+        #z_star = self.attention_step(z_star, x, causal=True)
         out = self.out_proj(z_star)
 
         if self.residual:

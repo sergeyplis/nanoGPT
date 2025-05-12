@@ -34,9 +34,9 @@ class FixedPointIteration(torch.autograd.Function):
                     if torch.all(converged):
                         allconverged_indicator = True
                         break
-        if not allconverged_indicator:
-            print("forward has not converged")
-        ctx.save_for_backward(x, z)
+        # if not allconverged_indicator:
+        #     print("forward has not converged")
+        ctx.save_for_backward(x, z, converged)
         ctx.module = module
         ctx.max_iter = max_iter
         ctx.tol = tol
@@ -46,7 +46,7 @@ class FixedPointIteration(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        x, z_star = ctx.saved_tensors
+        x, z_star, forward_converged_mask = ctx.saved_tensors
         module = ctx.module
         max_iter = ctx.max_iter
         tol = ctx.tol
@@ -89,28 +89,29 @@ class FixedPointIteration(torch.autograd.Function):
 
         #        if not allconverged_indicator:
         #            print('Backward has not converged')
+        expanded_forward_mask = forward_converged_mask.unsqueeze(-1).expand(B, N, H, D)
+        expanded_forward_mask = expanded_forward_mask.reshape(B, N, C).float()
 
-        # ────────────────────────────────
-        # 2) one‑shot true backward through module parameters
-        # ────────────────────────────────
-        with torch.enable_grad():
-            # make z_star a leaf that *does* require grad
-            z_star_req = z_star.detach().requires_grad_(True)
-            # re‑compute the step under grad mode
-            z_next = module(z_star_req, x)
-            # and now propagate adjoint into all params
-            torch.autograd.grad(
-                outputs=z_next,
-                inputs=tuple(module.parameters()),
-                grad_outputs=adjoint,
-                only_inputs=True,
-            )
-        # ────────────────────────────────
+        # Zero out gradients for elements that did NOT converge in the forward pass
+        adjoint = adjoint * expanded_forward_mask
 
         def f_x(x_local):
             return module(z_star, x_local)
 
         _, vjp_x_fn = func.vjp(f_x, x)
         grad_x = vjp_x_fn(adjoint)[0]
+
+        # ────────────────────────────────
+        # 2) one‑shot true backward through module parameters
+        # ────────────────────────────────
+
+        # (re-)compute z_next so Autograd can trace the parameter paths
+        with torch.enable_grad():
+            z_star_req = z_star.detach().requires_grad_(True)
+            z_next = module(z_star_req, x.detach())  # x *detached* here
+
+        # 1-liner: populate param grads only
+        z_next.backward(adjoint)
+        # ────────────────────────────────
 
         return None, grad_x, None, None, None, None
