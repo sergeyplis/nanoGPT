@@ -10,6 +10,11 @@ class SelfAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         self.residual = residual
+        # mating sure all heads get initialized with different temperature
+        temperature_init = torch.ones(self.num_heads)
+        for h in range(self.num_heads):
+            temperature_init[h] += (h + 1) * 0.1
+        self.temperature = nn.Parameter(temperature_init)
 
         # Single matrix for Q, K, V projections
         self.qkv = nn.Linear(embed_dim, 3 * embed_dim)
@@ -39,6 +44,7 @@ class SelfAttention(nn.Module):
         # Scaled dot-product attention
         scale = self.head_dim**-0.5
         attn = (q @ k.transpose(-2, -1)) * scale
+        # attn = attn / self.temperature.view(1, self.num_heads, 1, 1)
         attn = attn.softmax(dim=-1)
 
         # Combine heads
@@ -92,16 +98,18 @@ class FixedPointSelfAttentionStep(nn.Module):
 
         qkv = self.qkv(z_k).reshape(B, -1, 3, H, D).permute(2, 0, 3, 1, 4)
         q, k, _ = qkv[0], qkv[1], qkv[2]
+        qkv_x = self.qkv(x).reshape(B, N, 3, H, D).permute(2, 0, 3, 1, 4)
+        v = qkv_x[2]
 
-        scale = D**-0.5
+        scale = D**-0.5 / self.temperature.view(1, H, 1, 1)
         attn = (q @ k.transpose(-2, -1)) * scale
-        attn = attn / self.temperature.view(1, H, 1, 1)
 
         if self.causal:
             mask = self.causal_mask[..., :N, :N]
             attn = attn.masked_fill(mask, float("-inf"))
+
         attn = attn.softmax(dim=-1)
-        v = x.reshape(B, -1, H, D).transpose(1, 2)
+
         z_next = (attn @ v).transpose(1, 2).reshape(B, -1, C)
 
         if self.normalize is not None:
@@ -146,12 +154,11 @@ class FixedPointSelfAttentionStepFlash(nn.Module):
         # Compute q, k from z_k
         qkv = self.qkv(z_k).reshape(B, N, 3, H, D).permute(2, 0, 3, 1, 4)
         q, k, _ = qkv[0], qkv[1], qkv[2]  # (B, H, N, D)
-
         # Compute v from x
-        v = x.reshape(B, N, H, D).transpose(1, 2)  # (B, H, N, D)
-
+        qkv_x = self.qkv(x).reshape(B, N, 3, H, D).permute(2, 0, 3, 1, 4)
+        v = qkv_x[2]
         # Apply scaling by sqrt(temperature) and sqrt(head_dim)
-        scale = 1.0 / self.temperature.sqrt().view(1, H, 1, 1)
+        scale = D**-0.5 / self.temperature.sqrt().view(1, H, 1, 1)
         q = q * scale
         k = k * scale
 
@@ -183,15 +190,18 @@ class FixedPointSelfAttention(nn.Module):
         residual=True,
         causal=False,
         flash=False,
-        dropout=0,
+        dropout=0.05,
         block_size=64,
     ):
         super().__init__()
         self.max_iter = max_iter
         self.eps = eps
+        self.num_heads = num_heads
+        self.embed_dim = embed_dim
         self.residual = residual
         self.out_proj = nn.Linear(embed_dim, embed_dim)
         self.normalize = nn.Tanh() if layer_norm else None
+
         if flash and hasattr(torch.nn.functional, "scaled_dot_product_attention"):
             self.attention_step = FixedPointSelfAttentionStepFlash(
                 embed_dim, num_heads, layer_norm, causal=False, dropout=dropout
@@ -217,7 +227,7 @@ class FixedPointSelfAttention(nn.Module):
             self.eps,
         )
 
-        #z_star = self.attention_step(z_star, x, causal=True)
+        # z_star = self.attention_step(z_star, x, causal=True)
         out = self.out_proj(z_star)
 
         if self.residual:
